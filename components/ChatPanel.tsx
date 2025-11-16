@@ -14,6 +14,7 @@ const ChatPanel: React.FC = () => {
     }
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleSendMessage = useCallback(async (inputText: string) => {
@@ -22,6 +23,8 @@ const ChatPanel: React.FC = () => {
 
     setError(null);
     setIsLoading(true);
+    const controller = new AbortController();
+    setAbortController(controller);
 
     const userMessage: Message = {
       id: `user-${Date.now()}`,
@@ -40,12 +43,14 @@ const ChatPanel: React.FC = () => {
 
     setMessages(prev => [...prev, userMessage, assistantMessagePlaceholder]);
 
+    let fullText = '';
+
     try {
       const stream = await streamChat({
         message: trimmedMessage,
         history: historyForRequest,
+        signal: controller.signal,
       });
-      let fullText = '';
       for await (const chunk of stream) {
         fullText += chunk;
         setMessages(prev =>
@@ -55,13 +60,26 @@ const ChatPanel: React.FC = () => {
         );
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : '알 수 없는 오류가 발생했습니다.';
-      setError(errorMessage);
-      setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId)); // Remove placeholder on error
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        if (!fullText) {
+          setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
+        }
+      } else {
+        const errorMessage = err instanceof Error ? err.message : '알 수 없는 오류가 발생했습니다.';
+        setError(errorMessage);
+        setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
+      }
     } finally {
       setIsLoading(false);
+      setAbortController(null);
     }
   }, [isLoading, messages]);
+
+  const handleStopResponse = useCallback(() => {
+    if (abortController) {
+      abortController.abort();
+    }
+  }, [abortController]);
 
   return (
     <div className="flex flex-col h-full">
@@ -71,7 +89,7 @@ const ChatPanel: React.FC = () => {
         </div>
       )}
       <MessageList messages={messages} isLoading={isLoading} />
-      <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} />
+      <ChatInput onSendMessage={handleSendMessage} onStop={handleStopResponse} isLoading={isLoading} />
     </div>
   );
 };

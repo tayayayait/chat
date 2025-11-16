@@ -3,6 +3,7 @@ import type { Message } from '../types';
 interface StreamChatParams {
   message: string;
   history: Message[];
+  signal?: AbortSignal;
 }
 
 interface SsePayload {
@@ -73,13 +74,14 @@ const parseSseStream = async function* (response: Response): AsyncGenerator<stri
   }
 };
 
-export const streamChat = async ({ message, history }: StreamChatParams) => {
+export const streamChat = async ({ message, history, signal }: StreamChatParams) => {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ message, history }),
+    signal,
   });
 
   if (!response.ok) {
