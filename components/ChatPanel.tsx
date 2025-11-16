@@ -17,7 +17,8 @@ const ChatPanel: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const handleSendMessage = useCallback(async (inputText: string) => {
-    if (!inputText.trim() || isLoading) return;
+    const trimmedMessage = inputText.trim();
+    if (!trimmedMessage || isLoading) return;
 
     setError(null);
     setIsLoading(true);
@@ -25,10 +26,8 @@ const ChatPanel: React.FC = () => {
     const userMessage: Message = {
       id: `user-${Date.now()}`,
       role: 'user',
-      content: inputText,
+      content: trimmedMessage,
     };
-
-    setMessages(prev => [...prev, userMessage]);
 
     const assistantMessageId = `model-${Date.now()}`;
     const assistantMessagePlaceholder: Message = {
@@ -36,15 +35,19 @@ const ChatPanel: React.FC = () => {
       role: 'model',
       content: '',
     };
-    
-    setMessages(prev => [...prev, assistantMessagePlaceholder]);
+
+    const historyForRequest = messages.filter(msg => msg.id !== 'init-message');
+
+    setMessages(prev => [...prev, userMessage, assistantMessagePlaceholder]);
 
     try {
-      const stream = await streamChat(inputText);
+      const stream = await streamChat({
+        message: trimmedMessage,
+        history: historyForRequest,
+      });
       let fullText = '';
       for await (const chunk of stream) {
-        const chunkText = chunk.text;
-        fullText += chunkText;
+        fullText += chunk;
         setMessages(prev =>
           prev.map(msg =>
             msg.id === assistantMessageId ? { ...msg, content: fullText } : msg
@@ -58,7 +61,7 @@ const ChatPanel: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading]);
+  }, [isLoading, messages]);
 
   return (
     <div className="flex flex-col h-full">
