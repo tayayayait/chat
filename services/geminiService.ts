@@ -1,31 +1,99 @@
+import type { Message } from '../types';
 
-import { GoogleGenAI, Chat } from "@google/genai";
-
-if (!process.env.API_KEY) {
-    throw new Error("API_KEY environment variable is not set.");
+interface StreamChatParams {
+  message: string;
+  history: Message[];
 }
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+interface SsePayload {
+  type: 'chunk' | 'complete' | 'error';
+  text?: string;
+  message?: string;
+}
 
-// This chat instance is stateful and maintains conversation history for the session.
-// For a stateless approach (e.g., managing history client-side), you might create
-// a new chat session for each request or pass the history manually.
-const chat: Chat = ai.chats.create({
-  model: 'gemini-2.5-flash',
-  config: {
-    systemInstruction: '당신은 친절하고 도움이 되는 어시스턴트입니다. 정보에 입각하여 간결하게 답변해주세요. 필요한 경우, 마크다운을 사용하여 텍스트 서식을 지정할 수 있습니다 (예: **굵게**, *기울임꼴*, `코드`).',
-  },
-});
-
-export const streamChat = async (message: string) => {
-  try {
-    const result = await chat.sendMessageStream({ message });
-    return result;
-  } catch (error) {
-    console.error("Gemini API call failed:", error);
-    if (error instanceof Error && error.message.includes('API key not valid')) {
-        throw new Error("잘못된 API 키입니다. 설정을 확인해주세요.");
-    }
-    throw new Error("봇으로부터 응답을 받지 못했습니다. 다시 시도해주세요.");
+const parseSseStream = async function* (response: Response): AsyncGenerator<string> {
+  if (!response.body) {
+    throw new Error('응답 본문이 비어 있습니다. 잠시 후 다시 시도해주세요.');
   }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf('\n\n');
+
+        const dataLines = rawEvent
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.replace(/^data:\s*/, ''));
+
+        if (!dataLines.length) {
+          continue;
+        }
+
+        const dataString = dataLines.join('\n').trim();
+        if (!dataString) {
+          continue;
+        }
+
+        if (dataString === '[DONE]') {
+          return;
+        }
+
+        let payload: SsePayload | undefined;
+        try {
+          payload = JSON.parse(dataString) as SsePayload;
+        } catch {
+          continue;
+        }
+
+        if (payload.type === 'error') {
+          throw new Error(payload.message ?? '서버에서 오류가 발생했습니다.');
+        }
+
+        if (payload.type === 'chunk' && typeof payload.text === 'string') {
+          yield payload.text;
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+};
+
+export const streamChat = async ({ message, history }: StreamChatParams) => {
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ message, history }),
+  });
+
+  if (!response.ok) {
+    let errorMessage = '봇으로부터 응답을 받지 못했습니다. 다시 시도해주세요.';
+    try {
+      const errorBody = await response.json();
+      if (typeof errorBody?.error === 'string') {
+        errorMessage = errorBody.error;
+      }
+    } catch {
+      // ignore body parse errors
+    }
+    throw new Error(errorMessage);
+  }
+
+  return parseSseStream(response);
 };
