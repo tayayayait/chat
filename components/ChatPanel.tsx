@@ -1,21 +1,176 @@
 
-import React, { useState, useCallback } from 'react';
-import type { Message } from '../types';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import type { Conversation, Message } from '../types';
 import { streamChat } from '../services/geminiService';
+import { loadConversations, saveConversations } from '../services/conversationStorage';
 import MessageList from './MessageList';
 import ChatInput from './ChatInput';
 
+const INITIAL_ASSISTANT_MESSAGE: Message = {
+  id: 'init-message',
+  role: 'model',
+  content: '안녕하세요! 무엇을 도와드릴까요?',
+};
+
+const createInitialMessages = (): Message[] => [{ ...INITIAL_ASSISTANT_MESSAGE }];
+
+const createConversation = (): Conversation => ({
+  id: `conv-${Date.now()}`,
+  title: '새 대화',
+  messages: createInitialMessages(),
+  updatedAt: Date.now(),
+});
+
+const cloneMessages = (msgs: Message[]): Message[] => msgs.map(msg => ({ ...msg }));
+
+const deriveConversationTitle = (msgs: Message[]): string => {
+  const firstUserMessage = msgs.find(msg => msg.role === 'user' && msg.content.trim());
+  if (firstUserMessage) {
+    const normalized = firstUserMessage.content.trim();
+    return normalized.length > 30 ? `${normalized.slice(0, 30)}...` : normalized;
+  }
+  return '새 대화';
+};
+
+const sortByUpdatedAt = (conversations: Conversation[]): Conversation[] =>
+  [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
+
 const ChatPanel: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'init-message',
-      role: 'model',
-      content: '안녕하세요! 무엇을 도와드릴까요?',
-    }
-  ]);
+  const [messages, setMessages] = useState<Message[]>(createInitialMessages);
   const [isLoading, setIsLoading] = useState(false);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const messagesRef = useRef<Message[]>(messages);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    const storedConversations = sortByUpdatedAt(loadConversations());
+    if (storedConversations.length > 0) {
+      const latest = storedConversations[0];
+      setConversations(storedConversations);
+      setCurrentConversationId(latest.id);
+      setMessages(cloneMessages(latest.messages.length ? latest.messages : createInitialMessages()));
+      return;
+    }
+
+    const initialConversation = createConversation();
+    setConversations([initialConversation]);
+    setCurrentConversationId(initialConversation.id);
+    saveConversations([initialConversation]);
+  }, []);
+
+  const applyConversationsUpdate = useCallback(
+    (
+      updater: (prev: Conversation[]) => Conversation[],
+      afterUpdate?: (updated: Conversation[]) => void,
+    ) => {
+      setConversations(prev => {
+        const updated = sortByUpdatedAt(updater(prev));
+        saveConversations(updated);
+        afterUpdate?.(updated);
+        return updated;
+      });
+    },
+    [],
+  );
+
+  const persistConversationState = useCallback((updatedMessages: Message[]) => {
+    if (!currentConversationId) {
+      return;
+    }
+    const preparedMessages = cloneMessages(updatedMessages);
+    const title = deriveConversationTitle(preparedMessages);
+    applyConversationsUpdate(prev => {
+      const remaining = prev.filter(conv => conv.id !== currentConversationId);
+      const updatedConversation: Conversation = {
+        id: currentConversationId,
+        title,
+        messages: preparedMessages,
+        updatedAt: Date.now(),
+      };
+      return [...remaining, updatedConversation];
+    });
+  }, [applyConversationsUpdate, currentConversationId]);
+
+  const ensureConversationId = useCallback(() => {
+    if (currentConversationId) {
+      return currentConversationId;
+    }
+    const newConversation = createConversation();
+    setCurrentConversationId(newConversation.id);
+    setMessages(cloneMessages(newConversation.messages));
+    applyConversationsUpdate(prev => [newConversation, ...prev]);
+    return newConversation.id;
+  }, [applyConversationsUpdate, currentConversationId]);
+
+  const handleSelectConversation = useCallback((conversation: Conversation) => {
+    setCurrentConversationId(conversation.id);
+    setMessages(cloneMessages(conversation.messages.length ? conversation.messages : createInitialMessages()));
+    setIsHistoryOpen(false);
+  }, []);
+
+  const handleNewConversation = useCallback(() => {
+    const newConversation = createConversation();
+    setCurrentConversationId(newConversation.id);
+    setMessages(cloneMessages(newConversation.messages));
+    applyConversationsUpdate(prev => [newConversation, ...prev.filter(conv => conv.id !== newConversation.id)]);
+    setIsHistoryOpen(false);
+  }, [applyConversationsUpdate]);
+
+  const handleRenameConversation = useCallback((conversation: Conversation) => {
+    const newTitle = window.prompt('새로운 대화명을 입력하세요.', conversation.title)?.trim();
+    if (!newTitle) {
+      return;
+    }
+    applyConversationsUpdate(prev =>
+      prev.map(conv =>
+        conv.id === conversation.id
+          ? { ...conv, title: newTitle, updatedAt: Date.now() }
+          : conv,
+      ),
+    );
+  }, [applyConversationsUpdate]);
+
+  const handleDeleteConversation = useCallback((conversation: Conversation) => {
+    const confirmed = window.confirm('이 대화를 삭제하시겠습니까?');
+    if (!confirmed) {
+      return;
+    }
+    applyConversationsUpdate(prev => prev.filter(conv => conv.id !== conversation.id), updated => {
+      if (currentConversationId === conversation.id) {
+        if (updated.length > 0) {
+          const fallback = updated[0];
+          setCurrentConversationId(fallback.id);
+          setMessages(cloneMessages(fallback.messages));
+        } else {
+          const freshConversation = createConversation();
+          setCurrentConversationId(freshConversation.id);
+          setMessages(cloneMessages(freshConversation.messages));
+          setConversations([freshConversation]);
+          saveConversations([freshConversation]);
+        }
+      }
+    });
+  }, [applyConversationsUpdate, currentConversationId]);
+
+  const formatConversationDate = (timestamp: number) => {
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+    return date.toLocaleString('ko-KR', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
 
   const handleSendMessage = useCallback(async (inputText: string) => {
     const trimmedMessage = inputText.trim();
@@ -25,6 +180,8 @@ const ChatPanel: React.FC = () => {
     setIsLoading(true);
     const controller = new AbortController();
     setAbortController(controller);
+
+    const activeConversationId = ensureConversationId();
 
     const userMessage: Message = {
       id: `user-${Date.now()}`,
@@ -72,8 +229,16 @@ const ChatPanel: React.FC = () => {
     } finally {
       setIsLoading(false);
       setAbortController(null);
+      if (fullText) {
+        persistConversationState(messagesRef.current);
+      } else {
+        // Even if the assistant response failed, make sure we store the latest user turn.
+        if (messagesRef.current.some(msg => msg.role === 'user')) {
+          persistConversationState(messagesRef.current);
+        }
+      }
     }
-  }, [isLoading, messages]);
+  }, [ensureConversationId, isLoading, messages, persistConversationState]);
 
   const handleStopResponse = useCallback(() => {
     if (abortController) {
@@ -82,14 +247,103 @@ const ChatPanel: React.FC = () => {
   }, [abortController]);
 
   return (
-    <div className="flex flex-col h-full">
-      {error && (
-        <div className="p-3 bg-red-500/80 text-white text-center rounded-md m-4 border border-red-700 shadow-lg">
-          <p><strong>오류:</strong> {error}</p>
+    <div className="flex h-full relative">
+      <aside
+        className={`fixed inset-y-0 left-0 z-20 w-72 bg-gray-900/95 border-r border-gray-800 p-4 flex flex-col gap-4 transform transition-transform duration-300 md:static md:translate-x-0 ${isHistoryOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
+        aria-label="대화 기록"
+      >
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-white">대화 기록</h2>
+          <button
+            type="button"
+            className="md:hidden text-gray-300 hover:text-white"
+            onClick={() => setIsHistoryOpen(false)}
+            aria-label="대화 기록 닫기"
+          >
+            닫기
+          </button>
         </div>
+        <button
+          type="button"
+          onClick={handleNewConversation}
+          className="w-full px-3 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-500 transition"
+        >
+          새 대화
+        </button>
+        <div className="flex-1 overflow-y-auto space-y-3">
+          {conversations.length === 0 ? (
+            <p className="text-sm text-gray-400">대화 기록이 없습니다.</p>
+          ) : (
+            conversations.map(conversation => (
+              <button
+                key={conversation.id}
+                type="button"
+                onClick={() => handleSelectConversation(conversation)}
+                className={`w-full text-left p-3 rounded-lg border transition ${conversation.id === currentConversationId ? 'border-purple-500 bg-purple-500/10' : 'border-gray-800 bg-gray-800/40 hover:border-purple-500/60'}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-white truncate">{conversation.title}</span>
+                  <span className="text-xs text-gray-400 whitespace-nowrap">{formatConversationDate(conversation.updatedAt)}</span>
+                </div>
+                <div className="mt-3 flex items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    className="px-2 py-1 rounded bg-gray-700/80 text-gray-200 hover:bg-gray-600"
+                    onClick={event => {
+                      event.stopPropagation();
+                      handleRenameConversation(conversation);
+                    }}
+                  >
+                    이름 변경
+                  </button>
+                  <button
+                    type="button"
+                    className="px-2 py-1 rounded bg-red-600/80 text-white hover:bg-red-500"
+                    onClick={event => {
+                      event.stopPropagation();
+                      handleDeleteConversation(conversation);
+                    }}
+                  >
+                    삭제
+                  </button>
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </aside>
+      {isHistoryOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-10 md:hidden"
+          onClick={() => setIsHistoryOpen(false)}
+          aria-hidden="true"
+        />
       )}
-      <MessageList messages={messages} isLoading={isLoading} />
-      <ChatInput onSendMessage={handleSendMessage} onStop={handleStopResponse} isLoading={isLoading} />
+      <div className="flex-1 flex flex-col h-full bg-gray-950/30">
+        <div className="md:hidden p-4 border-b border-gray-800 flex items-center gap-3">
+          <button
+            type="button"
+            className="px-3 py-2 rounded-md bg-gray-800 text-gray-100"
+            onClick={() => setIsHistoryOpen(true)}
+          >
+            대화 기록 보기
+          </button>
+          <button
+            type="button"
+            className="px-3 py-2 rounded-md bg-purple-600 text-white"
+            onClick={handleNewConversation}
+          >
+            새 대화
+          </button>
+        </div>
+        {error && (
+          <div className="p-3 bg-red-500/80 text-white text-center rounded-md m-4 border border-red-700 shadow-lg">
+            <p><strong>오류:</strong> {error}</p>
+          </div>
+        )}
+        <MessageList messages={messages} isLoading={isLoading} />
+        <ChatInput onSendMessage={handleSendMessage} onStop={handleStopResponse} isLoading={isLoading} />
+      </div>
     </div>
   );
 };
