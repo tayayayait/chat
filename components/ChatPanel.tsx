@@ -5,6 +5,7 @@ import { streamChat } from '../services/geminiService';
 import { loadConversations, saveConversations } from '../services/conversationStorage';
 import MessageList from './MessageList';
 import ChatInput from './ChatInput';
+import ConversationCard from './ConversationCard';
 
 const INITIAL_ASSISTANT_MESSAGE: Message = {
   id: 'init-message',
@@ -247,9 +248,9 @@ const ChatPanel: React.FC = () => {
   }, [abortController]);
 
   return (
-    <div className="flex h-full relative">
+    <div className="relative flex h-full">
       <aside
-        className={`fixed inset-y-0 left-0 z-20 w-72 bg-gray-900/95 border-r border-gray-800 p-4 flex flex-col gap-4 transform transition-transform duration-300 md:static md:translate-x-0 ${isHistoryOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
+        className={`fixed inset-y-0 left-0 z-30 w-80 border-r border-white/5 bg-gradient-to-b from-gray-950/95 via-gray-900/90 to-gray-950/95 p-5 backdrop-blur-2xl shadow-2xl transition-transform duration-300 md:relative md:z-auto md:translate-x-0 md:shadow-none ${isHistoryOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
         aria-label="대화 기록"
       >
         <div className="flex items-center justify-between">
@@ -266,71 +267,47 @@ const ChatPanel: React.FC = () => {
         <button
           type="button"
           onClick={handleNewConversation}
-          className="w-full px-3 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-500 transition"
+          className="w-full rounded-xl bg-gradient-to-r from-purple-500 via-indigo-500 to-sky-500 px-3 py-2 text-sm font-semibold text-white shadow-lg shadow-purple-900/40 transition hover:brightness-110"
         >
           새 대화
         </button>
-        <div className="flex-1 overflow-y-auto space-y-3">
+        <div className="flex-1 space-y-3 overflow-y-auto pt-2">
           {conversations.length === 0 ? (
             <p className="text-sm text-gray-400">대화 기록이 없습니다.</p>
           ) : (
             conversations.map(conversation => (
-              <button
+              <ConversationCard
                 key={conversation.id}
-                type="button"
-                onClick={() => handleSelectConversation(conversation)}
-                className={`w-full text-left p-3 rounded-lg border transition ${conversation.id === currentConversationId ? 'border-purple-500 bg-purple-500/10' : 'border-gray-800 bg-gray-800/40 hover:border-purple-500/60'}`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-white truncate">{conversation.title}</span>
-                  <span className="text-xs text-gray-400 whitespace-nowrap">{formatConversationDate(conversation.updatedAt)}</span>
-                </div>
-                <div className="mt-3 flex items-center gap-2 text-xs">
-                  <button
-                    type="button"
-                    className="px-2 py-1 rounded bg-gray-700/80 text-gray-200 hover:bg-gray-600"
-                    onClick={event => {
-                      event.stopPropagation();
-                      handleRenameConversation(conversation);
-                    }}
-                  >
-                    이름 변경
-                  </button>
-                  <button
-                    type="button"
-                    className="px-2 py-1 rounded bg-red-600/80 text-white hover:bg-red-500"
-                    onClick={event => {
-                      event.stopPropagation();
-                      handleDeleteConversation(conversation);
-                    }}
-                  >
-                    삭제
-                  </button>
-                </div>
-              </button>
+                conversation={conversation}
+                isActive={conversation.id === currentConversationId}
+                onSelect={handleSelectConversation}
+                onRename={handleRenameConversation}
+                onDelete={handleDeleteConversation}
+                formatConversationDate={formatConversationDate}
+              />
             ))
           )}
         </div>
       </aside>
       {isHistoryOpen && (
         <div
-          className="fixed inset-0 bg-black/60 z-10 md:hidden"
+          className="fixed inset-0 z-20 bg-black/70 backdrop-blur-sm md:hidden"
           onClick={() => setIsHistoryOpen(false)}
           aria-hidden="true"
         />
       )}
-      <div className="flex-1 flex flex-col h-full bg-gray-950/30">
-        <div className="md:hidden p-4 border-b border-gray-800 flex items-center gap-3">
+      <div className="flex h-full flex-1 flex-col bg-gray-950/30">
+        <div className="flex items-center gap-3 border-b border-gray-800 p-4 md:hidden">
           <button
             type="button"
-            className="px-3 py-2 rounded-md bg-gray-800 text-gray-100"
+            className="rounded-xl bg-gray-800/70 px-3 py-2 text-sm text-gray-100 shadow-inner"
             onClick={() => setIsHistoryOpen(true)}
           >
             대화 기록 보기
           </button>
           <button
             type="button"
-            className="px-3 py-2 rounded-md bg-purple-600 text-white"
+            className="rounded-xl bg-gradient-to-r from-purple-500 to-sky-500 px-3 py-2 text-sm font-semibold text-white"
             onClick={handleNewConversation}
           >
             새 대화
