@@ -1,0 +1,5 @@
+{
+  "name": "Streamline Chat",
+  "description": "A production-ready, open-source template for building real-time streaming chatbot web applications. It provides a '3-minute setup' to deploy a fully functional, streaming-first chatbot UI, making it the fastest way to go from an LLM idea to a shareable prototype.",
+  "requestFramePermissions": []
+}
